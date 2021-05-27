@@ -646,3 +646,185 @@ bool approxEqual(T)(const T lhs, const T rhs, real maxRelDiff = 0x1p-20f, real m
     assert(approxEqual(_cdouble(1.0, 1), _cdouble(1.0000001, 1), 1.0000001));
     assert(!approxEqual(_cdouble(100000.0L, 0), _cdouble(100001L, 0)));
 }
+
+/++
+True if `T` is
+
++/
+template isBuiltinMath(alias T)
+{
+    version(LDC)
+    {
+        static if (__traits(isSame, T, sqrt) ||
+                   __traits(isSame, T, sin) ||
+                   __traits(isSame, T, cos) ||
+                   __traits(isSame, T, powi) ||
+                   __traits(isSame, T, pow) ||
+                   __traits(isSame, T, exp) ||
+                   __traits(isSame, T, log) ||
+                   __traits(isSame, T, fma) ||
+                   __traits(isSame, T, fabs) ||
+                   __traits(isSame, T, floor) ||
+                   __traits(isSame, T, exp2) ||
+                   __traits(isSame, T, log10) ||
+                   __traits(isSame, T, log2) ||
+                   __traits(isSame, T, ceil) ||
+                   __traits(isSame, T, trunc) ||
+                   __traits(isSame, T, rint) ||
+                   __traits(isSame, T, nearbyInt) ||
+                   __traits(isSame, T, copysign) ||
+                   __traits(isSame, T, round) ||
+                   __traits(isSame, T, fmuladd) ||
+                   __traits(isSame, T, fmin) ||
+                   __traits(isSame, T, fmax))
+        {
+            enum bool isBuiltinMath = true;
+        }
+        else
+        {
+            enum bool isBuiltinMath = false;
+        }
+    }
+    else version (GNU)
+    {
+        static if (__traits(isSame, T, sqrt) ||
+                   __traits(isSame, T, sin) ||
+                   __traits(isSame, T, cos) ||
+                   __traits(isSame, T, powi) ||
+                   __traits(isSame, T, pow) ||
+                   __traits(isSame, T, exp) ||
+                   __traits(isSame, T, log) ||
+                   __traits(isSame, T, fma) ||
+                   __traits(isSame, T, fabs) ||
+                   __traits(isSame, T, floor) ||
+                   __traits(isSame, T, exp2) ||
+                   __traits(isSame, T, log10) ||
+                   __traits(isSame, T, log2) ||
+                   __traits(isSame, T, ceil) ||
+                   __traits(isSame, T, trunc) ||
+                   __traits(isSame, T, rint) ||
+                   __traits(isSame, T, nearbyInt) ||
+                   __traits(isSame, T, copysign) ||
+                   __traits(isSame, T, round) ||
+                   __traits(isSame, T, fmuladd) ||
+                   __traits(isSame, T, fmin) ||
+                   __traits(isSame, T, fmax))
+        {
+            enum bool isBuiltinMath = true;
+        }
+        else
+        {
+            enum bool isBuiltinMath = false;
+        }
+    }
+    else static if (__VERSION__ >= 2082) // DMD 2.082 onward.
+    {
+        static if (__traits(isSame, T, powi) ||
+                   __traits(isSame, T, pow) ||
+                   __traits(isSame, T, log) ||
+                   __traits(isSame, T, log10) ||
+                   __traits(isSame, T, log2) ||
+                   __traits(isSame, T, trunc) ||
+                   __traits(isSame, T, nearbyint) ||
+                   __traits(isSame, T, copysign) ||
+                   __traits(isSame, T, round))
+        {
+            enum bool isBuiltinMath = true;
+        }
+        else static if (__traits(isSame, T, fmin) || 
+                        __traits(isSame, T, fmax))
+        {
+            version (Windows) // https://issues.dlang.org/show_bug.cgi?id=19798
+            {
+                version (CRuntime_Microsoft)
+                    enum bool isBuiltinMath = true;
+                else
+                    enum bool isBuiltinMath = false;
+            }
+            else
+            {
+                enum bool isBuiltinMath = true;
+            }
+        }
+        else
+        {
+            enum bool isBuiltinMath = false;
+        }
+    } else { // DMD version prior to 2.082
+        static if (__traits(isSame, T, sin) ||
+                   __traits(isSame, T, cos) ||
+                   __traits(isSame, T, powi) ||
+                   __traits(isSame, T, pow) ||
+                   __traits(isSame, T, exp) ||
+                   __traits(isSame, T, log) ||
+                   __traits(isSame, T, fma) ||
+                   __traits(isSame, T, fabs) ||
+                   __traits(isSame, T, floor) ||
+                   __traits(isSame, T, exp2) ||
+                   __traits(isSame, T, log10) ||
+                   __traits(isSame, T, log2) ||
+                   __traits(isSame, T, ceil) ||
+                   __traits(isSame, T, trunc) ||
+                   __traits(isSame, T, rint) ||
+                   __traits(isSame, T, nearbyInt) ||
+                   __traits(isSame, T, copysign) ||
+                   __traits(isSame, T, round))
+        {
+                enum bool isBuiltinMath = true;
+        }
+        else static if (__traits(isSame, T, fmin) || 
+                        __traits(isSame, T, fmax))
+        {
+            version (Windows) // https://issues.dlang.org/show_bug.cgi?id=19798
+            {
+                version (CRuntime_Microsoft)
+                    enum bool isBuiltinMath = true;
+                else
+                    enum bool isBuiltinMath = false;
+            }
+            else
+            {
+                enum bool isBuiltinMath = true;
+            }
+        }
+        else
+        {
+            enum bool isBuiltinMath = false;
+        }
+    }
+}
+
+///
+version (mir_core_test)
+@nogc nothrow pure @safe
+unittest
+{
+    version(LDC)
+    {
+        static assert(isBuiltinMath!sqrt);
+        static assert(isBuiltinMath!exp);
+        static assert(isBuiltinMath!log);
+        static assert(isBuiltinMath!fmuladd);
+    }
+    else version(GNU)
+    {
+        static assert(isBuiltinMath!sqrt);
+        static assert(isBuiltinMath!exp);
+        static assert(isBuiltinMath!log);
+        static assert(isBuiltinMath!fmuladd);
+    }
+    else static if (__VERSION__ >= 2082)
+    {
+        static assert(!isBuiltinMath!sqrt);
+        static assert(!isBuiltinMath!exp);
+        static assert(isBuiltinMath!log);
+        static assert(!isBuiltinMath!fmuladd);
+    }
+    else
+    {
+        static assert(!isBuiltinMath!sqrt);
+        static assert(isBuiltinMath!exp);
+        static assert(isBuiltinMath!log);
+        static assert(!isBuiltinMath!fmuladd);
+    }
+}
