@@ -3,12 +3,59 @@ Common floating point math functions.
 
 This module has generic LLVM-oriented API compatible with all D compilers.
 
+$(D pow) follows libm special-value conventions: a base of 1 yields 1 even
+for a NaN exponent, and either sign of 1 raised to an infinite exponent
+yields 1. For zero or infinite bases, a negative result requires a negative
+base and an odd integer exponent; the sign of zero is preserved accordingly.
+
 License: $(HTTP www.apache.org/licenses/LICENSE-2.0, Apache-2.0)
 Authors:   Ilia Ki, Phobos Team
 +/
 module mir.math.common;
 
 import mir.internal.utility: isComplex, isComplexOf, isFloatingPoint;
+private import std.traits: Unqual;
+
+// Normalize special values before using Phobos, whose runtime pow can differ
+// from LLVM/libm and the compiler's CTFE builtin for these inputs.
+private bool powSpecial(T)(in T x, in T power, out Unqual!T result)
+    @safe pure nothrow @nogc
+    if (isFloatingPoint!T)
+{
+    import std.math: signbit;
+
+    if (power == 0 || x == 1)
+    {
+        result = 1;
+        return true;
+    }
+    if (power == T.infinity || power == -T.infinity)
+    {
+        auto magnitude = x < 0 ? -x : x;
+        if (magnitude == 1)
+            result = 1;
+        else if (magnitude > 1)
+            result = power > 0 ? T.infinity : 0;
+        else if (magnitude < 1)
+            result = power > 0 ? 0 : T.infinity;
+        else
+            return false; // NaN base: let the backend propagate it.
+        return true;
+    }
+    if ((x == 0 || x == T.infinity || x == -T.infinity)
+        && (power > 0 || power < 0))
+    {
+        // Positive powers keep zero at zero and infinity at infinity;
+        // negative powers exchange them.
+        result = (x == 0) == (power > 0) ? 0 : T.infinity;
+        // Avoid integer casts: real can represent odd integers beyond long.max.
+        auto remainder = power % 2;
+        if (signbit(x) && (remainder == 1 || remainder == -1))
+            result = -result;
+        return true;
+    }
+    return false;
+}
 
 version(LDC)
 {
@@ -190,6 +237,9 @@ version(LDC)
         if (__ctfe)
         {
             import std.math: pow;
+            Unqual!T result;
+            if (powSpecial!T(val, power, result))
+                return result;
             return cast(T) pow(val, power);
         }
         return llvmPow(val, power);
@@ -392,7 +442,14 @@ else static if (__VERSION__ >= 2082) // DMD 2.082 onward.
     ///
     T cos(T)(in T x) if (isFloatingPoint!T) { return std.math.cos(x); }
     ///
-    T pow(T)(in T x, in T power) if (isFloatingPoint!T) { alias y = power; mixin(mixinCMath2!`pow`); }
+    T pow(T)(in T x, in T power) if (isFloatingPoint!T)
+    {
+        Unqual!T result;
+        if (powSpecial!T(x, power, result))
+            return result;
+        alias y = power;
+        mixin(mixinCMath2!`pow`);
+    }
     ///
     T powi(T)(in T x, int power) if (isFloatingPoint!T) { alias y = power; mixin(mixinCMath2!`pow`); }
     ///
@@ -521,7 +578,14 @@ else // DMD version prior to 2.082
     ///
     T cos(T)(in T x) if (isFloatingPoint!T) { mixin(mixinCMath!`cos`); }
     ///
-    T pow(T)(in T x, in T power) if (isFloatingPoint!T) { alias y = power; mixin(mixinCMath2!`pow`); }
+    T pow(T)(in T x, in T power) if (isFloatingPoint!T)
+    {
+        Unqual!T result;
+        if (powSpecial!T(x, power, result))
+            return result;
+        alias y = power;
+        mixin(mixinCMath2!`pow`);
+    }
     ///
     T powi(T)(in T x, int power) if (isFloatingPoint!T) { alias y = power; mixin(mixinCMath2!`pow`); }
     ///
@@ -676,6 +740,83 @@ version (mir_core_test)
         assert(runtimePowi(T.nan, 0) == 1);
         assert(isNaN(runtimePowi(T.nan, 3)));
         assert(runtimePowi(T(2), -3) == T(0.125));
+    }}
+}
+
+version (mir_core_test)
+@nogc nothrow pure @safe unittest
+{
+    import std.meta: AliasSeq;
+    import std.math: signbit, isNaN;
+
+    pragma(inline, false)
+    static T runtimePow(T)(T base, T exponent)
+    {
+        return pow(base, exponent);
+    }
+
+    static foreach (T; AliasSeq!(float, double, real))
+    {{
+        // Explicit expected values: do not use CTFE as the runtime oracle.
+        enum T[3][] specialCases = [
+            [T(1), T.nan, T(1)],
+            [T(1), T.infinity, T(1)],
+            [T(1), -T.infinity, T(1)],
+            [T(-1), T.infinity, T(1)],
+            [T(-1), -T.infinity, T(1)],
+            [T.nan, T(0), T(1)],
+            [T.nan, T(2), T.nan],
+            [T.nan, T.infinity, T.nan],
+            [T(2), T.nan, T.nan],
+            [-T.infinity, T.nan, T.nan],
+            [-T.infinity, -T.infinity, T(0)],
+            [-T.infinity, T.infinity, T.infinity],
+            [-T.infinity, T(-0.5), T(0)],
+            [-T.infinity, T(0.5), T.infinity],
+            [-T.infinity, T(-3), -T(0)],
+            [-T.infinity, T(3), -T.infinity],
+            [-T.infinity, T(-2), T(0)],
+            [-T.infinity, T(2), T.infinity],
+            [T.infinity, -T.infinity, T(0)],
+            [T.infinity, T.infinity, T.infinity],
+            [-T(0), T(-3), -T.infinity],
+            [-T(0), T(3), -T(0)],
+            [-T(0), T(-0.5), T.infinity],
+            [-T(0), T(0.5), T(0)],
+            [-T(0), T.infinity, T(0)],
+            [-T(0), -T.infinity, T.infinity],
+            [T(0), T(-3), T.infinity],
+            [T(0), T(3), T(0)],
+            [T(0.5), T.infinity, T(0)],
+            [T(-0.5), -T.infinity, T.infinity],
+            [T(-2), T.infinity, T.infinity],
+            [T(2), -T.infinity, T(0)],
+            [T(-2), T(0.5), T.nan]];
+
+        static foreach (entry; specialCases)
+        {{
+            enum expected = entry[2];
+            enum compileTime = pow(entry[0], entry[1]);
+            static if (isNaN(expected))
+                static assert(isNaN(compileTime));
+            else
+                static assert(compileTime == expected
+                    && signbit(compileTime) == signbit(expected));
+
+            auto actual = runtimePow(entry[0], entry[1]);
+            if (isNaN(expected))
+                assert(isNaN(actual));
+            else
+                assert(actual == expected && signbit(actual) == signbit(expected));
+        }}
+
+        static if (T.mant_dig >= 64)
+        {
+            enum T largeOdd = 0x1p63L + 1;
+            static assert(signbit(pow(-T(0), largeOdd)));
+            assert(signbit(runtimePow(-T(0), largeOdd)));
+            assert(runtimePow(-T.infinity, largeOdd) == -T.infinity);
+        }
     }}
 }
 
