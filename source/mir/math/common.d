@@ -152,6 +152,14 @@ version(LDC)
         pragma(LDC_intrinsic, "llvm.powi.f#")
         private T llvmPowi(T)(in T val, int power) if (isFloatingPoint!T);
 
+    version (CRuntime_Microsoft)
+    // Keep LLVM from speculating both pow intrinsics before selecting a result.
+    pragma(inline, false)
+    private T widePowi(T)(T val, int power) if (isFloatingPoint!T)
+    {
+        return cast(T) llvmPowi(cast(double) val, power);
+    }
+
     ///
     T powi(T)(in T val, int power) if (isFloatingPoint!T)
     {
@@ -160,6 +168,15 @@ version(LDC)
         {
             import std.math: pow;
             return cast(T) pow(val, power);
+        }
+        version (CRuntime_Microsoft)
+        static if (T.mant_dig == float.mant_dig)
+        {
+            // LLVM lowers float powi to powf on this target, converting the
+            // exponent to float. Beyond 2^^24 this can lose integer parity.
+            // Double represents every int exactly, including int.min.
+            if (power < -0x1000000 || power > 0x1000000)
+                return widePowi(val, power);
         }
         return llvmPowi(val, power);
     }
@@ -619,6 +636,46 @@ version (mir_core_test)
         auto integerPower = &powi!T;
         assert(power(base, T(3)) == 8);
         assert(integerPower(base, -3) == reciprocal);
+    }}
+}
+
+version (mir_core_test)
+@nogc nothrow pure @safe unittest
+{
+    import std.meta: AliasSeq;
+    import std.math: signbit, isNaN;
+
+    // Keep the exponent unknown to the optimizer so these tests exercise
+    // runtime intrinsic lowering rather than constant folding.
+    pragma(inline, false)
+    static T runtimePowi(T)(T base, int exponent)
+    {
+        return powi(base, exponent);
+    }
+
+    static foreach (T; AliasSeq!(float, double, real))
+    {{
+        static assert(powi(T.nan, 0) == 1);
+        static assert(signbit(powi(-T(0), 3)));
+        static assert(powi(-T(0), -3) == -T.infinity);
+        static assert(signbit(powi(-T.infinity, -3)));
+
+        foreach (exponent; [int.min + 1, -0x1000001, -0xffffff,
+                           0xffffff, 0x1000001, int.max])
+        {
+            assert(runtimePowi(T(-1), exponent) == -1);
+            auto zeroPower = runtimePowi(-T(0), exponent);
+            auto infinityPower = runtimePowi(-T.infinity, exponent);
+            assert(signbit(zeroPower));
+            assert(signbit(infinityPower));
+            assert(zeroPower == (exponent < 0 ? -T.infinity : -T(0)));
+            assert(infinityPower == (exponent < 0 ? -T(0) : -T.infinity));
+        }
+        foreach (exponent; [int.min, -0x1000000, 0, 0x1000000, int.max - 1])
+            assert(runtimePowi(T(-1), exponent) == 1);
+        assert(runtimePowi(T.nan, 0) == 1);
+        assert(isNaN(runtimePowi(T.nan, 3)));
+        assert(runtimePowi(T(2), -3) == T(0.125));
     }}
 }
 
