@@ -126,7 +126,11 @@ enum
 
 version(LDC)
 {
-    import ldc.intrinsics: LLVM_version;
+    static import ldc.intrinsics;
+    static if (__traits(hasMember, ldc.intrinsics, "LLVM_major"))
+        private enum llvmMajor = ldc.intrinsics.LLVM_major;
+    else
+        private enum llvmMajor = ldc.intrinsics.LLVM_version / 100;
     nothrow @nogc pure @safe:
 
     pragma(LDC_intrinsic, "llvm.sqrt.f#")
@@ -141,26 +145,38 @@ version(LDC)
     ///
     T cos(T)(in T val) if (isFloatingPoint!T);
 
-    static if (LLVM_version >= 1300)
+    static if (llvmMajor >= 13)
         pragma(LDC_intrinsic, "llvm.powi.f#.i32")
-        ///
-        T powi(T)(in T val, int power) if (isFloatingPoint!T);
+        private T llvmPowi(T)(in T val, int power) if (isFloatingPoint!T);
     else 
         pragma(LDC_intrinsic, "llvm.powi.f#")
-        ///
-        T powi(T)(in T val, int power) if (isFloatingPoint!T);
+        private T llvmPowi(T)(in T val, int power) if (isFloatingPoint!T);
 
-    version(mir_core_test)
-    unittest
+    ///
+    T powi(T)(in T val, int power) if (isFloatingPoint!T)
     {
-        assert(powi(3.0, int(2)) == 9);
-        float f = 3;
-        assert(powi(f, int(2)) == 9);
+        // LLVM power intrinsics cannot be evaluated by CTFE.
+        if (__ctfe)
+        {
+            import std.math: pow;
+            return cast(T) pow(val, power);
+        }
+        return llvmPowi(val, power);
     }
 
     pragma(LDC_intrinsic, "llvm.pow.f#")
+    private T llvmPow(T)(in T val, in T power) if (isFloatingPoint!T);
+
     ///
-    T pow(T)(in T val, in T power) if (isFloatingPoint!T);
+    T pow(T)(in T val, in T power) if (isFloatingPoint!T)
+    {
+        if (__ctfe)
+        {
+            import std.math: pow;
+            return cast(T) pow(val, power);
+        }
+        return llvmPow(val, power);
+    }
 
     pragma(LDC_intrinsic, "llvm.exp.f#")
     ///
@@ -571,6 +587,39 @@ version (mir_core_test)
 {
     import mir.math: PI, feqrel;
     assert(feqrel(pow(2.0L, -0.5L), cos(PI / 4)) >= real.mant_dig - 1);
+}
+
+version (mir_core_test)
+@nogc nothrow pure @safe unittest
+{
+    import std.meta: AliasSeq;
+
+    static foreach (T; AliasSeq!(float, double, real))
+    {{
+        // Exercise the CTFE path separately from the runtime implementation.
+        enum root = pow(T(4), T(0.5));
+        enum reciprocal = powi(T(2), -3);
+        static assert(is(typeof(root) == T));
+        static assert(is(typeof(reciprocal) == T));
+        static assert(root == 2 && reciprocal == T(0.125));
+        static assert(powi(T(-1), int.min) == 1);
+        static assert(powi(T(-1), int.max) == -1);
+        static assert(pow(T(0), T(0)) == 1);
+        static assert(powi(T(0), 0) == 1);
+
+        T base = 2;
+        assert(pow(base, T(3)) == 8);
+        assert(powi(base, -3) == reciprocal);
+        assert(pow(T(4), T(0.5)) == root);
+        assert(powi(T(-1), int.min) == 1);
+        assert(powi(T(-1), 31) == -1);
+
+        // Preserve explicit instantiation and function-address use.
+        auto power = &pow!T;
+        auto integerPower = &powi!T;
+        assert(power(base, T(3)) == 8);
+        assert(integerPower(base, -3) == reciprocal);
+    }}
 }
 
 /// Overload for cdouble, cfloat and creal
