@@ -225,6 +225,10 @@ Complex!T exp(T)(Complex!T x) @trusted pure nothrow @nogc // TODO: @safe
     alias isNaN = x => x != x;
     alias isInfinity = x => x.fabs == T.infinity;
 
+    // Preserve the imaginary zero, even when the real exponential overflows.
+    if (x.im == 0)
+        return Complex!T(exp(x.re), x.im);
+
     // Handle special cases explicitly here, as fromPolar will otherwise
     // cause them to return Complex!T(NaN, NaN), or with the wrong sign.
     if (isInfinity(x.re))
@@ -243,30 +247,58 @@ Complex!T exp(T)(Complex!T x) @trusted pure nothrow @nogc // TODO: @safe
             else
                 return Complex!T(T.infinity, -T.nan);
         }
-        if (x.im == 0)
-        {
-            if (copysign(1, x.re) < 0)
-                return Complex!T(0);
-            else
-                return Complex!T(T.infinity);
-        }
     }
     if (isNaN(x.re))
     {
         if (isNaN(x.im) || isInfinity(x.im))
             return Complex!T(T.nan, T.nan);
-        if (x.im == 0)
-            return x;
     }
     if (x.re == 0)
     {
         if (isNaN(x.im) || isInfinity(x.im))
             return Complex!T(T.nan, T.nan);
-        if (x.im == 0)
-            return Complex!T(1, 0);
     }
 
     return fromPolar!T(exp(x.re), x.im);
+}
+
+@safe pure nothrow @nogc version(mir_core_test) unittest
+{
+    import mir.math.ieee: signbit;
+    import std.meta: AliasSeq;
+
+    static foreach (T; AliasSeq!(float, double, real))
+    {
+        static assert(is(typeof(exp(Complex!T(0, 0))) == Complex!T));
+    }
+
+    bool check(T)() @safe pure nothrow @nogc
+    {
+        foreach (im; [T(0.0), -T(0.0)])
+        {
+            foreach (re; [T(0.0), -T(0.0), T.infinity, -T.infinity,
+                          T.max, -T.max, T.nan])
+            {
+                auto result = exp(Complex!T(re, im));
+                assert(result.im == 0 && signbit(result.im) == signbit(im));
+                if (re != re)
+                    assert(result.re != result.re);
+                else if (re == 0)
+                    assert(result.re == 1);
+                else if (re > 0)
+                    assert(result.re == T.infinity);
+                else
+                    assert(result.re == 0 && !signbit(result.re));
+            }
+        }
+        return true;
+    }
+
+    static foreach (T; AliasSeq!(float, double, real))
+    {
+        static assert(check!T());
+        assert(check!T());
+    }
 }
 
 ///
