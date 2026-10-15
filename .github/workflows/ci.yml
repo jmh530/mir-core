@@ -24,11 +24,12 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         arch: [x86, x86_64]
         include:
+          # The pinned setup-dlang action requires an x64 host.
           - dc: ldc-latest
-            os: macos-latest
+            os: macos-15-intel
             arch: x86_64
           - dc: dmd-latest
-            os: macos-latest
+            os: macos-15-intel
             arch: x86_64
     steps:
       - uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
